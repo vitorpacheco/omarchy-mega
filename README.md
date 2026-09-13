@@ -49,17 +49,7 @@ omarchy plugin add https://github.com/vitorpacheco/omarchy-mega.git --enable
 
 Review the code when prompted. Omarchy clones the public repository into `~/.config/omarchy/plugins/io.github.vitorpacheco.mega`, validates the manifest, and enables the **M** icon in the right section of the bar. It does not run installation hooks or install MEGAcmd automatically.
 
-For local development, you can instead install a copy from a checkout:
-
-```bash
-git clone https://github.com/vitorpacheco/omarchy-mega.git
-cd omarchy-mega
-./install.sh
-```
-
-The local installer validates the manifest, copies the runtime files, backs up an existing `shell.json`, and enables the plugin through Omarchy. It honors `XDG_CONFIG_HOME` when set and refuses to overwrite an existing plugin directory. Choose one installation method; they use the same plugin ID and destination.
-
-Run either installation method as your normal desktop user.
+Run the installation command as your normal desktop user. The plugin has no custom installer or setup hooks.
 
 ### 3. Sign in
 
@@ -180,26 +170,13 @@ omarchy plugin enable io.github.vitorpacheco.mega
 
 ## Updating
 
-If you installed through `omarchy plugin add`, use the native update command:
+Use the native update command:
 
 ```bash
 omarchy plugin update io.github.vitorpacheco.mega
 ```
 
 Omarchy fetches the repository, lets you review the changes, and updates the installed checkout.
-
-### Updating a local copy
-
-The installer copies files; it does not link the installed plugin to this checkout. To update, back up the installed plugin directory, update this checkout, and copy the runtime files again from the repository root:
-
-```bash
-git pull --ff-only
-plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/io.github.vitorpacheco.mega"
-omarchy plugin validate .
-cp I18n.js Service.qml Widget.qml manifest.json README.md LICENSE "$plugin_dir/"
-cp bin/mega_bridge.py "$plugin_dir/bin/"
-omarchy-shell shell rescanPlugins
-```
 
 ## Disabling or removing the plugin
 
