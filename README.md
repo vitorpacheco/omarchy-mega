@@ -41,15 +41,25 @@ command -v mega-cmd
 
 ### 2. Install the plugin
 
+Use Omarchy's native plugin manager:
+
+```bash
+omarchy plugin add https://github.com/vitorpacheco/omarchy-mega.git --enable
+```
+
+Review the code when prompted. Omarchy clones the public repository into `~/.config/omarchy/plugins/io.github.vitorpacheco.mega`, validates the manifest, and enables the **M** icon in the right section of the bar. It does not run installation hooks or install MEGAcmd automatically.
+
+For local development, you can instead install a copy from a checkout:
+
 ```bash
 git clone https://github.com/vitorpacheco/omarchy-mega.git
 cd omarchy-mega
 ./install.sh
 ```
 
-The installer validates the manifest, copies the plugin to `~/.config/omarchy/plugins/io.github.vitorpacheco.mega`, backs up an existing `shell.json`, and enables the **M** icon in the right section of the bar. It honors `XDG_CONFIG_HOME` when set.
+The local installer validates the manifest, copies the runtime files, backs up an existing `shell.json`, and enables the plugin through Omarchy. It honors `XDG_CONFIG_HOME` when set and refuses to overwrite an existing plugin directory. Choose one installation method; they use the same plugin ID and destination.
 
-Run the installer as your normal desktop user. It does not install MEGAcmd or overwrite an existing plugin installation.
+Run either installation method as your normal desktop user.
 
 ### 3. Sign in
 
@@ -168,7 +178,17 @@ omarchy restart shell
 omarchy plugin enable io.github.vitorpacheco.mega
 ```
 
-## Updating a local installation
+## Updating
+
+If you installed through `omarchy plugin add`, use the native update command:
+
+```bash
+omarchy plugin update io.github.vitorpacheco.mega
+```
+
+Omarchy fetches the repository, lets you review the changes, and updates the installed checkout.
+
+### Updating a local copy
 
 The installer copies files; it does not link the installed plugin to this checkout. To update, back up the installed plugin directory, update this checkout, and copy the runtime files again from the repository root:
 
@@ -194,6 +214,14 @@ omarchy plugin remove io.github.vitorpacheco.mega
 ```
 
 Disabling or removing the panel does not stop MEGAcmd or remove its sync configurations. Manage those separately through MEGAcmd.
+
+## Permissions and background service
+
+Like other Omarchy shell plugins, this plugin runs unsandboxed with your desktop user's permissions. Its QML files run inside the existing `omarchy-shell` process; it does not start another shell instance during normal use.
+
+The panel invokes Python 3 and the local `mega-exec` command. MEGAcmd owns authentication, network connections to MEGA, file transfers, and the persistent `mega-cmd-server` background process. Commands run with the current user's file access. The plugin itself does not require root, read MEGAcmd's credential cache, or store passwords or transfer links in a plugin log.
+
+The account shortcut opens `mega-cmd` through `omarchy launch tui`. Folder shortcuts use `xdg-open`, and web shortcuts open MEGA URLs in the default browser. Installing system dependencies may require administrator authentication; that is separate from installing or running this plugin. There are no remote build steps or downloaded scripts executed by the plugin.
 
 ## Development checks
 
