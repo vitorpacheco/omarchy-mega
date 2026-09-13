@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.vitorpacheco.mega",
+  "name": "MEGA Sync",
+  "version": "0.2.1",
+  "author": "Vitor Pacheco",
+  "license": "MIT",
+  "description": "MEGA storage, transfers and folder syncs in the Omarchy bar, powered by MEGAcmd.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "MEGA Sync",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 15,
+      "execPath": "mega-exec",
+      "language": "auto"
+    },
+    "schema": [
+      {
+        "key": "language",
+        "type": "enum",
+        "label": "Language / Idioma",
+        "options": [
+          "auto",
+          "pt",
+          "en",
+          "es"
+        ],
+        "defaultValue": "auto",
+        "description": "auto: system language. English fallback. pt: Português; en: English; es: Español."
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 5,
+        "max": 300,
+        "defaultValue": 15
+      },
+      {
+        "key": "execPath",
+        "type": "path",
+        "label": "mega-exec executable",
+        "defaultValue": "mega-exec"
+      }
+    ]
+  }
+}
