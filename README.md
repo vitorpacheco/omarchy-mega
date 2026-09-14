@@ -196,7 +196,7 @@ Disabling or removing the panel does not stop MEGAcmd or remove its sync configu
 
 Like other Omarchy shell plugins, this plugin runs unsandboxed with your desktop user's permissions. Its QML files run inside the existing `omarchy-shell` process; it does not start another shell instance during normal use.
 
-The panel invokes Python 3 and the local `mega-exec` command. MEGAcmd owns authentication, network connections to MEGA, file transfers, and the persistent `mega-cmd-server` background process. Commands run with the current user's file access. The plugin itself does not require root, read MEGAcmd's credential cache, or store passwords or transfer links in a plugin log.
+The panel invokes Python 3 and the local `mega-exec` command. MEGAcmd owns authentication, network connections to MEGA, file transfers, and the persistent `mega-cmd-server` background process. Commands run with the current user's file access. The plugin itself does not require root, read MEGAcmd's credential cache, or store passwords or transfer links in a plugin log. Each MEGAcmd call runs in its own process group under a 25-second deadline, with stdout capped at 2 MiB and stderr at 64 KiB; on timeout or overflow the whole group is terminated, killed, and reaped. At most 100 transfers and 100 syncs, with cells up to 4,096 characters, are passed to the bar widget.
 
 The account shortcut opens `mega-cmd` through `omarchy launch tui`. Folder shortcuts use `xdg-open`, and web shortcuts open MEGA URLs in the default browser. Installing system dependencies may require administrator authentication; that is separate from installing or running this plugin. There are no remote build steps or downloaded scripts executed by the plugin.
 
@@ -218,7 +218,7 @@ To inspect the actual backend response, run:
 python3 bin/mega_bridge.py status
 ```
 
-Tests cover parsing, errors, timeouts, command construction, localization, and form completion. Real transfers require an authenticated session and user-selected files.
+Tests cover parsing, errors, timeouts, output and row limits, process-group cleanup, command construction, localization, and form completion. Real transfers require an authenticated session and user-selected files.
 
 ## References
 

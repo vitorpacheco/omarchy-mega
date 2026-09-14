@@ -1,7 +1,9 @@
 import importlib.util
+import json
+import os
 from pathlib import Path
-import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -21,18 +23,19 @@ class BridgeTests(unittest.TestCase):
     def test_columns_preserve_spaces_and_unicode(self):
         row = ["⇑", "47", "/home/me/Olá mundo ' $(touch nope).txt", "/Backup", "52.10% of 2 MB", "ACTIVE"]
         text = b.SEPARATOR.join(b.TRANSFER_COLS) + "\n" + b.SEPARATOR.join(row)
-        result = b.table(text, b.TRANSFER_COLS)
+        result, truncated = b.table(text, b.TRANSFER_COLS)
+        self.assertFalse(truncated)
         self.assertEqual(result[0]["SOURCEPATH"], row[2])
         self.assertEqual(result[0]["TAG"], "47")
 
     def test_empty_transfer_header_and_truncated_rows(self):
         empty = b.SEPARATOR.join(["", "", "SOURCEPATH", "DESTINYPATH", "", ""])
-        self.assertEqual(b.table(empty, b.TRANSFER_COLS), [])
+        self.assertEqual(b.table(empty, b.TRANSFER_COLS), ([], False))
         with self.assertRaises(b.MegaError):
             b.table(b.SEPARATOR.join(["upload", "3", "truncated"]), b.TRANSFER_COLS)
 
     def test_unrecognized_response_is_not_empty_success(self):
-        self.assertEqual(b.table("", b.SYNC_COLS), [])
+        self.assertEqual(b.table("", b.SYNC_COLS), ([], False))
         with self.assertRaises(b.MegaError):
             b.table("Unexpected server error", b.SYNC_COLS)
 
@@ -83,11 +86,99 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(state["transfers"], [])
             self.assertTrue(state["errors"])
 
-    def test_timeout_and_nonzero_exit(self):
-        with patch.object(b.subprocess, "run", side_effect=subprocess.TimeoutExpired("mega-exec", 25)):
-            with self.assertRaises(b.MegaError): b.run("mega-exec", "df")
-        with patch.object(b.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "offline")):
-            with self.assertRaisesRegex(b.MegaError, "offline"): b.run("mega-exec", "df")
+    def fake_exec(self, folder, body):
+        fake = Path(folder) / "mega-exec"
+        fake.write_text("#!/usr/bin/env python3\nimport os, signal, subprocess, sys, time\n" + body)
+        fake.chmod(0o755)
+        return str(fake)
+
+    def assertGroupGone(self, pidfile):
+        pid = int(Path(pidfile).read_text())
+        for _ in range(100):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.02)
+        self.fail(f"descendant {pid} survived cleanup")
+
+    def test_nonzero_exit_and_missing_executable(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fake = self.fake_exec(folder, 'sys.stderr.write("offline\\n"); sys.exit(1)\n')
+            with self.assertRaisesRegex(b.MegaError, "offline"): b.run(fake, "df")
+            with self.assertRaises(b.MegaError): b.run(str(Path(folder) / "absent"), "df")
+
+    def test_deadline_kills_whole_process_group(self):
+        with tempfile.TemporaryDirectory() as folder:
+            pidfile = Path(folder) / "child.pid"
+            # Leader ignores SIGTERM and a grandchild holds the pipes open.
+            fake = self.fake_exec(folder, f'signal.signal(signal.SIGTERM, signal.SIG_IGN)\n'
+                                  f'c = subprocess.Popen([sys.executable, "-c", "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"])\n'
+                                  f'open({str(pidfile)!r}, "w").write(str(c.pid))\nprint("partial", flush=True)\ntime.sleep(60)\n')
+            started = time.monotonic()
+            with self.assertRaisesRegex(b.MegaError, "não respondeu"): b.run(fake, "df", timeout=1)
+            self.assertLess(time.monotonic() - started, 1 + b.KILL_GRACE + 2)
+            self.assertGroupGone(pidfile)
+
+    def test_deadline_applies_after_leader_exits(self):
+        with tempfile.TemporaryDirectory() as folder:
+            pidfile = Path(folder) / "child.pid"
+            fake = self.fake_exec(folder, f'c = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])\n'
+                                  f'open({str(pidfile)!r}, "w").write(str(c.pid))\n')
+            with self.assertRaisesRegex(b.MegaError, "não respondeu"): b.run(fake, "df", timeout=1)
+            self.assertGroupGone(pidfile)
+
+    def test_stdout_and_stderr_byte_ceilings(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for stream in ("stdout", "stderr"):
+                with self.subTest(stream=stream):
+                    pidfile = Path(folder) / f"{stream}.pid"
+                    fake = self.fake_exec(folder, f'open({str(pidfile)!r}, "w").write(str(os.getpid()))\n'
+                                          f'out = sys.{stream}.buffer\nwhile True: out.write(b"x" * 65536)\n')
+                    started = time.monotonic()
+                    received = []
+                    def reader(fd, size, real=os.read):
+                        chunk = real(fd, size)
+                        received.append((size, len(chunk)))
+                        return chunk
+                    with patch.object(b, "MAX_STDOUT", 200000), patch.object(b, "MAX_STDERR", 50000), \
+                         patch.object(b.os, "read", side_effect=reader):
+                        with self.assertRaisesRegex(b.MegaError, "limite"): b.run(fake, "df")
+                    limit = 200000 if stream == "stdout" else 50000
+                    self.assertLessEqual(max(size for size, _ in received), b.CHUNK)
+                    # Only the overflowing stream can have been read up to its ceiling + 1.
+                    self.assertLessEqual(sum(n for _, n in received), limit + 1 + (200000 if stream == "stderr" else 0))
+                    self.assertLess(time.monotonic() - started, 5)
+                    self.assertGroupGone(pidfile)
+
+    def test_output_exactly_at_ceiling_is_accepted(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fake = self.fake_exec(folder, 'sys.stdout.write("y" * 1000)\n')
+            with patch.object(b, "MAX_STDOUT", 1000):
+                self.assertEqual(len(b.run(fake, "df")), 1000)
+
+    def test_row_and_field_caps(self):
+        rows = [b.SEPARATOR.join(["⇑", str(i), "/" + "a" * 10000, "/B", "1%", "ACTIVE"]) for i in range(500)]
+        result, truncated = b.table("\n".join(rows), b.TRANSFER_COLS)
+        self.assertTrue(truncated)
+        self.assertEqual(len(result), b.MAX_ROWS)
+        self.assertEqual(len(result[0]["SOURCEPATH"]), b.MAX_FIELD)
+        with self.assertRaises(b.MegaError):
+            b.table(b.SEPARATOR.join(["⇑", "1" * (b.MAX_ID + 1), "/a", "/B", "1%", "ACTIVE"]), b.TRANSFER_COLS)
+
+    def test_status_json_is_bounded(self):
+        row = lambda i: b.SEPARATOR.join([str(i), "/" + "l" * 9000, "/" + "r" * 9000, "Running", "Synced", ""])
+        def fake_run(executable, command, *args):
+            if command == "whoami": return "user@example.com"
+            if command == "transfers": raise b.MegaError("x" * 5000)
+            return "\n".join(row(i) for i in range(1000))
+        with patch.object(b.shutil, "which", return_value="/bin/mega-exec"), patch.object(b, "run", side_effect=fake_run):
+            state = b.status("mega-exec", include_storage=False)
+        self.assertTrue(state["truncated"])
+        self.assertEqual(len(state["syncs"]), b.MAX_ROWS)
+        self.assertLessEqual(len(state["errors"][0]), b.MAX_ERROR_CHARS)
+        self.assertLess(len(json.dumps(state, ensure_ascii=False).encode()),
+                        2 * b.MAX_ROWS * len(b.SYNC_COLS) * b.MAX_FIELD * 4)
 
     def test_real_subprocess_protocol(self):
         with tempfile.TemporaryDirectory() as folder:

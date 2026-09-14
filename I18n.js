@@ -339,6 +339,11 @@ var messages = {
     "MEGAcmd did not respond within 25 seconds. Check your connection and try again.",
     "MEGAcmd no respondió en 25 segundos. Comprueba la conexión e inténtalo de nuevo."
   ],
+  "A resposta do MEGAcmd excedeu o limite de tamanho permitido.": [
+    "A resposta do MEGAcmd excedeu o limite de tamanho permitido.",
+    "The MEGAcmd response exceeded the allowed size limit.",
+    "La respuesta de MEGAcmd superó el límite de tamaño permitido."
+  ],
   "Não foi possível executar o MEGAcmd.": [
     "Não foi possível executar o MEGAcmd.",
     "Could not run MEGAcmd.",
