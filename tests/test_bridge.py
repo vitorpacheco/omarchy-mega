@@ -2,6 +2,8 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -64,11 +66,9 @@ class BridgeTests(unittest.TestCase):
                 b.action_args("download", {"remote": "https://mega.nz.evil/file/a", "local": folder})
 
     def test_missing_and_logged_out(self):
-        with patch.object(b.shutil, "which", return_value=None):
-            self.assertEqual(b.status("mega-exec")["state"], "missing")
-        with patch.object(b.shutil, "which", return_value="/bin/mega-exec"), \
-             patch.object(b, "run", side_effect=b.MegaError("Not logged in.")):
-            state = b.status("mega-exec")
+        self.assertEqual(b.status(None)["state"], "missing")
+        with patch.object(b, "run", side_effect=b.MegaError("Not logged in.")):
+            state = b.status("/bin/mega-exec")
             self.assertEqual(state["state"], "login")
             self.assertFalse(state["connected"])
             self.assertIsNone(state["storage"])
@@ -79,8 +79,8 @@ class BridgeTests(unittest.TestCase):
             if command == "df": return "USED STORAGE: 42 42.0% of 100"
             if command == "transfers": raise b.MegaError("offline")
             return ""
-        with patch.object(b.shutil, "which", return_value="/bin/mega-exec"), patch.object(b, "run", side_effect=fake_run):
-            state = b.status("mega-exec")
+        with patch.object(b, "run", side_effect=fake_run):
+            state = b.status("/bin/mega-exec")
             self.assertEqual(state["state"], "partial")
             self.assertEqual(state["storage"]["used"], 42)
             self.assertEqual(state["transfers"], [])
@@ -172,13 +172,47 @@ class BridgeTests(unittest.TestCase):
             if command == "whoami": return "user@example.com"
             if command == "transfers": raise b.MegaError("x" * 5000)
             return "\n".join(row(i) for i in range(1000))
-        with patch.object(b.shutil, "which", return_value="/bin/mega-exec"), patch.object(b, "run", side_effect=fake_run):
-            state = b.status("mega-exec", include_storage=False)
+        with patch.object(b, "run", side_effect=fake_run):
+            state = b.status("/bin/mega-exec", include_storage=False)
         self.assertTrue(state["truncated"])
         self.assertEqual(len(state["syncs"]), b.MAX_ROWS)
         self.assertLessEqual(len(state["errors"][0]), b.MAX_ERROR_CHARS)
         self.assertLess(len(json.dumps(state, ensure_ascii=False).encode()),
                         2 * b.MAX_ROWS * len(b.SYNC_COLS) * b.MAX_FIELD * 4)
+
+    def test_only_root_owned_system_executables_are_trusted(self):
+        with patch.object(b, "TRUSTED_DIRS", ("/usr/bin",)):
+            self.assertEqual(b.find_tool("env"), os.path.realpath("/usr/bin/env"))
+            self.assertIsNone(b.find_tool("absent-mega-tool"))
+            self.assertIsNone(b.find_tool("../../tmp"))
+        with tempfile.TemporaryDirectory() as folder:
+            fake = self.fake_exec(folder, "")
+            # User-owned files and directories are rejected even when listed as trusted.
+            self.assertFalse(b._trusted(fake))
+            with patch.object(b, "TRUSTED_DIRS", (folder,)):
+                self.assertIsNone(b.find_tool("mega-exec"))
+        self.assertFalse(b._trusted("/tmp"))  # root-owned but world-writable
+        self.assertTrue(b._trusted(os.path.realpath("/usr/bin/env")))
+
+    def test_megacmd_runs_with_closed_environment(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fake = self.fake_exec(folder, "import json\nprint(json.dumps(dict(os.environ)))\n")
+            hostile = {"PATH": folder, "LD_PRELOAD": "/nonexistent.so", "PYTHONPATH": folder, "HOME": folder}
+            with patch.dict(os.environ, hostile):
+                env = json.loads(b.run(fake, "whoami"))
+        self.assertEqual(set(env) - {"PWD", "SHLVL", "_"}, {"HOME", "PATH", "LC_ALL", "LANG"})
+        self.assertEqual(env["PATH"], folder + ":/usr/bin")
+        self.assertNotEqual(env["HOME"], folder)
+
+    def test_executable_cannot_be_chosen_by_caller(self):
+        bridge = Path(__file__).parents[1] / "bin/mega_bridge.py"
+        result = subprocess.run([sys.executable, "-I", str(bridge), "--exec", "/tmp/evil", "status"],
+                                capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 2)
+        with patch.object(b, "find_tool", return_value=None), patch.object(sys, "argv", ["bridge", "storage"]), \
+             patch("builtins.print") as printed:
+            self.assertEqual(b.main(), 1)
+        self.assertFalse(json.loads(printed.call_args[0][0])["ok"])
 
     def test_real_subprocess_protocol(self):
         with tempfile.TemporaryDirectory() as folder:

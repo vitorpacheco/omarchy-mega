@@ -19,7 +19,6 @@
     "defaultSection": "right",
     "defaults": {
       "refreshIntervalSec": 15,
-      "execPath": "mega-exec",
       "language": "auto"
     },
     "schema": [
@@ -43,12 +42,6 @@
         "min": 5,
         "max": 300,
         "defaultValue": 15
-      },
-      {
-        "key": "execPath",
-        "type": "path",
-        "label": "mega-exec executable",
-        "defaultValue": "mega-exec"
       }
     ]
   }

@@ -17,9 +17,9 @@ The plugin uses **MEGAcmd only**. The MEGAsync desktop application is not requir
 ## Requirements
 
 - Omarchy with `omarchy-shell` and plugin support.
-- Python 3.
 - Qt Quick Dialogs, provided by the desktop's Qt installation.
-- [MEGAcmd](https://mega.nz/cmd), including `mega-exec` and `mega-cmd` on your `PATH`.
+- `/usr/bin/python3`.
+- [MEGAcmd](https://mega.nz/cmd), with `mega-exec` and `mega-cmd` installed in `/usr/bin` or `/usr/local/bin`.
 - Git to clone this repository.
 
 ## Installation
@@ -77,7 +77,6 @@ Open the widget settings in Omarchy, or edit its existing entry under `bar.layou
 {
   "id": "io.github.vitorpacheco.mega",
   "refreshIntervalSec": 15,
-  "execPath": "mega-exec",
   "language": "auto"
 }
 ```
@@ -87,7 +86,6 @@ This is a single widget entry, not a replacement for the entire `shell.json` fil
 | Setting | Default | Description |
 | --- | --- | --- |
 | `refreshIntervalSec` | `15` | Polling interval while the panel is closed, in seconds. The settings editor accepts 5–300. |
-| `execPath` | `mega-exec` | Executable name on `PATH`, or an absolute path to `mega-exec`. For a custom path, keep `mega-cmd` in the same directory. |
 | `language` | `auto` | `auto`, `en` (English), `pt` (Portuguese), or `es` (Spanish). |
 
 With `auto`, the panel follows the system locale. Unsupported locales and missing translations fall back to English. The selected language also applies to plugin messages, known status labels, numbers, and activity timestamps. Unknown MEGAcmd diagnostics remain verbatim, and native file chooser controls follow the system language.
@@ -140,7 +138,7 @@ omarchy-shell mega toggle
 
 ## Troubleshooting
 
-**MEGAcmd is not detected:** check `command -v mega-exec`. If it is installed outside your `PATH`, set `execPath` to its absolute path.
+**MEGAcmd is not detected:** the plugin only runs MEGAcmd from `/usr/bin` or `/usr/local/bin`, and only when the executable and every parent directory are owned by root and not writable by other users. Your `PATH` is ignored. Install MEGAcmd with your system package manager, then check `ls -l /usr/bin/mega-exec /usr/bin/mega-cmd`.
 
 **The panel asks you to sign in:** run `mega-cmd` and use `login your@email.com`. Being signed in to the MEGAsync desktop application does not sign you in to MEGAcmd.
 
@@ -196,13 +194,13 @@ Disabling or removing the panel does not stop MEGAcmd or remove its sync configu
 
 Like other Omarchy shell plugins, this plugin runs unsandboxed with your desktop user's permissions. Its QML files run inside the existing `omarchy-shell` process; it does not start another shell instance during normal use.
 
-The panel invokes Python 3 and the local `mega-exec` command. MEGAcmd owns authentication, network connections to MEGA, file transfers, and the persistent `mega-cmd-server` background process. Commands run with the current user's file access. The plugin itself does not require root, read MEGAcmd's credential cache, or store passwords or transfer links in a plugin log. Each MEGAcmd call runs in its own process group under a 25-second deadline, with stdout capped at 2 MiB and stderr at 64 KiB; on timeout or overflow the whole group is terminated, killed, and reaped. At most 100 transfers and 100 syncs, with cells up to 4,096 characters, are passed to the bar widget.
+The panel runs its bridge as `/usr/bin/python3 -I` with a cleared environment containing only a fixed `PATH=/usr/bin` and a UTF-8 locale, so user `PATH` entries, loader variables such as `LD_PRELOAD`, and Python variables such as `PYTHONPATH` never reach it. The bridge resolves `mega-exec` and `mega-cmd` only from `/usr/bin` or `/usr/local/bin`, accepts them only if the executable and every parent directory are root-owned and not writable by group or others, and runs that exact absolute path. There is no setting to choose another executable. MEGAcmd runs with a closed environment: `HOME` from the user database, `PATH` limited to its own directory and `/usr/bin`, and the C locale. MEGAcmd owns authentication, network connections to MEGA, file transfers, and the persistent `mega-cmd-server` background process. Commands run with the current user's file access. The plugin itself does not require root, read MEGAcmd's credential cache, or store passwords or transfer links in a plugin log. Each MEGAcmd call runs in its own process group under a 25-second deadline, with stdout capped at 2 MiB and stderr at 64 KiB; on timeout or overflow the whole group is terminated, killed, and reaped. At most 100 transfers and 100 syncs, with cells up to 4,096 characters, are passed to the bar widget.
 
-The account shortcut opens `mega-cmd` through `omarchy launch tui`. Folder shortcuts use `xdg-open`, and web shortcuts open MEGA URLs in the default browser. Installing system dependencies may require administrator authentication; that is separate from installing or running this plugin. There are no remote build steps or downloaded scripts executed by the plugin.
+The account shortcut opens the resolved `mega-cmd` path through `/usr/bin/omarchy launch tui`, and folder shortcuts use `/usr/bin/xdg-open`. Both start with a cleared environment that keeps only the desktop session variables they need (such as `HOME`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and `DBUS_SESSION_BUS_ADDRESS`) and a fixed `PATH` of `/usr/share/omarchy/bin:/usr/bin`. Web shortcuts open MEGA URLs in the default browser. Installing system dependencies may require administrator authentication; that is separate from installing or running this plugin. There are no remote build steps or downloaded scripts executed by the plugin.
 
 ## Development checks
 
-Run these commands from the repository root. Node.js is required only for the localization checks. The QML smoke test requires an active Omarchy Wayland session and uses a fake MEGAcmd executable.
+Run these commands from the repository root. Node.js is required only for the localization checks. The QML tests require an active Omarchy Wayland session; they stage a copy of the plugin whose bridge resolves a fake MEGAcmd executable instead of the system one.
 
 ```bash
 omarchy plugin validate .
@@ -215,10 +213,10 @@ python3 tests/qml_storage.py
 To inspect the actual backend response, run:
 
 ```bash
-python3 bin/mega_bridge.py status
+/usr/bin/python3 -I bin/mega_bridge.py status
 ```
 
-Tests cover parsing, errors, timeouts, output and row limits, process-group cleanup, command construction, localization, and form completion. Real transfers require an authenticated session and user-selected files.
+Tests cover parsing, errors, timeouts, output and row limits, process-group cleanup, trusted executable resolution, the closed MEGAcmd environment, command construction, localization, and form completion. Real transfers require an authenticated session and user-selected files.
 
 ## References
 

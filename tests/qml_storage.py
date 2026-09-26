@@ -3,14 +3,11 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-repo = Path(__file__).resolve().parents[1]
+from qml_fixture import stage
+
 with tempfile.TemporaryDirectory(prefix="mega-storage-test-") as folder:
     temp = Path(folder)
-    (temp / "Plugin").symlink_to(repo)
-    for name in ("Commons", "Ui"):
-        (temp / name).symlink_to(Path("/usr/share/omarchy/shell") / name)
-    fake = temp / "mega-exec"
-    fake.write_text('''#!/usr/bin/env python3
+    fakes = stage(temp, '''#!/usr/bin/env python3
 import sys,time
 from pathlib import Path
 if sys.argv[1] == 'whoami': print('fixture@example.com')
@@ -24,13 +21,14 @@ elif sys.argv[1] == 'df':
         sys.exit(1)
     print('USED STORAGE: ' + ('42' if count == 1 else '43') + ' 42% of 100')
 ''')
-    fake.chmod(0o755)
     (temp / "shell.qml").write_text('''import QtQuick
 import Quickshell
+import Quickshell.Io
 import "Plugin"
 ShellRoot {
     property int stage: 0
-    Service { id: service; settings: ({execPath: "EXECUTABLE"}) }
+    Service { id: service; settings: ({}) }
+    Process { id: uninstall; command: ["/usr/bin/touch", "MISSING"]; onExited: service.refresh(false) }
     function fail(text) { console.error("TEST_FAILED: " + text); Qt.quit() }
     Timer {
         interval: 800; running: true
@@ -55,17 +53,17 @@ ShellRoot {
                 stage = 3
             } else if (stage === 3 && service.storageValue.used === 43) {
                 if (service.storageError !== "") return fail("Recovery did not clear warning")
-                service.settings = {execPath: "missing-fixture-executable"}
+                uninstall.running = true
                 stage = 4
             } else if (stage === 4 && service.snapshot.state === "missing") {
-                if (service.storageValue !== null) return fail("Storage leaked across backend change")
+                if (service.storageValue !== null) return fail("Storage leaked after MEGAcmd disappeared")
                 console.log("STORAGE_TESTS_OK"); Qt.quit()
             }
         }
     }
     Timer { interval: 6500; running: true; onTriggered: fail("Timeout") }
 }
-'''.replace("EXECUTABLE", str(fake)))
+'''.replace("MISSING", str(fakes / "missing")))
     result = subprocess.run(["quickshell", "-p", str(temp)], capture_output=True, text=True, timeout=10)
     output = result.stdout + result.stderr
     print(output)

@@ -1,14 +1,15 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Bounded, shell-free MEGAcmd adapter. No credentials or account cache access."""
 import argparse
 import concurrent.futures
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import selectors
-import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -29,6 +30,9 @@ MAX_ID = 64
 MAX_ERRORS = 8
 MAX_ERROR_CHARS = 800
 
+# MEGAcmd is only ever executed from these system directories, never from PATH or settings.
+TRUSTED_DIRS = ("/usr/bin", "/usr/local/bin")
+
 
 class MegaError(Exception):
     pass
@@ -36,6 +40,39 @@ class MegaError(Exception):
 
 class _Overflow(Exception):
     pass
+
+
+def _trusted(path):
+    """True when path and every ancestor are root-owned and not writable by group or others."""
+    try:
+        while True:
+            info = os.stat(path)
+            if info.st_uid != 0 or info.st_mode & 0o022:
+                return False
+            if path == "/":
+                return True
+            path = os.path.dirname(path)
+    except OSError:
+        return False
+
+
+def find_tool(name):
+    """Resolve a MEGAcmd executable to the exact absolute path that will be executed."""
+    for directory in TRUSTED_DIRS:
+        path = os.path.realpath(os.path.join(directory, name))
+        try:
+            regular = stat.S_ISREG(os.stat(path).st_mode)
+        except OSError:
+            continue
+        if regular and os.access(path, os.X_OK) and _trusted(path):
+            return path
+    return None
+
+
+def environment(executable):
+    """Closed environment for MEGAcmd: no inherited PATH, loader, or Python variables."""
+    return {"HOME": pwd.getpwuid(os.getuid()).pw_dir, "PATH": os.path.dirname(executable) + ":/usr/bin",
+            "LC_ALL": "C", "LANG": "C"}
 
 
 def _stop(proc):
@@ -70,7 +107,7 @@ def run(executable, *args, timeout=TIMEOUT):
     try:
         proc = subprocess.Popen([executable, *args], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, start_new_session=True,
-                                env={**os.environ, "LC_ALL": "C", "LANG": "C"})
+                                env=environment(executable))
     except (OSError, ValueError) as exc:
         raise MegaError("Não foi possível executar o MEGAcmd.") from exc
     out_fd, err_fd = proc.stdout.fileno(), proc.stderr.fileno()
@@ -162,7 +199,7 @@ def storage(raw):
 
 
 def status(executable, include_storage=True):
-    base = {"installed": bool(shutil.which(executable)), "connected": False,
+    base = {"installed": bool(executable), "connected": False, "terminal": find_tool("mega-cmd"),
             "storage": None, "transfers": [], "syncs": [], "errors": []}
     if not base["installed"]:
         base["state"] = "missing"
@@ -252,19 +289,21 @@ def action_args(action, values):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exec", default="mega-exec", dest="executable")
     parser.add_argument("operation", choices=["status", "storage", "action"])
     parser.add_argument("--skip-storage", action="store_true")
     args = parser.parse_args()
+    executable = find_tool("mega-exec")
     try:
         if args.operation == "status":
-            result = status(args.executable, include_storage=not args.skip_storage)
+            result = status(executable, include_storage=not args.skip_storage)
+        elif not executable:
+            raise MegaError("Não foi possível executar o MEGAcmd.")
         elif args.operation == "storage":
-            result = {"ok": True, "storage": storage(run(args.executable, "df"))}
+            result = {"ok": True, "storage": storage(run(executable, "df"))}
         else:
             request = json.load(sys.stdin)
             command = action_args(request["action"], request)
-            run(args.executable, *command)
+            run(executable, *command)
             result = {"ok": True, "message": "Solicitação aceita pelo MEGA."}
         print(json.dumps(result, ensure_ascii=False))
     except (MegaError, ValueError, KeyError, TypeError) as exc:

@@ -332,7 +332,7 @@ Ui.Panel {
                                     Label { visible: modelData.ERROR !== "NO" && modelData.ERROR !== "NO_SYNC_ERROR" && modelData.ERROR !== "None" && modelData.ERROR !== ""; Layout.fillWidth: true; text: root.translatedError(modelData.ERROR); color: root.red }
                                     RowLayout {
                                         Action { text: modelData.RUN_STATE === "Running" ? root.tr("Pausar") : root.tr("Retomar"); enabled: !mega.busy; onClicked: mega.act(modelData.RUN_STATE === "Running" ? "sync-pause" : "sync-resume", {id: modelData.ID}) }
-                                        Action { text: root.tr("Abrir pasta"); onClicked: Quickshell.execDetached(["xdg-open", modelData.LOCALPATH]) }
+                                        Action { text: root.tr("Abrir pasta"); onClicked: mega.openFolder(modelData.LOCALPATH) }
                                     }
                                     Rule {}
                                 }

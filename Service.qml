@@ -25,8 +25,10 @@ Item {
     readonly property bool refreshing: poll.running
     readonly property bool syncIssue: snapshot.syncs.some(s => s.RUN_STATE !== "Running" || s.STATUS !== "Synced")
     readonly property bool healthy: snapshot.state === "ready" && !syncIssue
-    readonly property string executable: String(settings.execPath || "mega-exec")
     readonly property string bridge: decodeURIComponent(Qt.resolvedUrl("bin/mega_bridge.py").toString().replace(/^file:\/\//, ""))
+    // The bridge runs isolated from the shell's PATH, loader, and Python variables.
+    readonly property var backendCommand: ["/usr/bin/python3", "-I", bridge]
+    readonly property var backendEnvironment: ({PATH: "/usr/bin", LANG: "C.UTF-8", LC_ALL: "C.UTF-8"})
     readonly property string stateLabel: {
         if (snapshot.state === "loading") return root.tr("Conectando…")
         if (snapshot.state === "missing") return root.tr("Instale o MEGAcmd")
@@ -49,15 +51,11 @@ Item {
     }
     function refresh(forceStorage) {
         forceStoragePending = forceStoragePending || forceStorage !== false
-        if (!poll.running) {
-            poll.requestExecutable = executable
-            poll.running = true
-        }
+        if (!poll.running) poll.running = true
     }
     function refreshStorage(force) {
         if (!snapshot.connected || storagePoll.running) return
         if (!force && Date.now() < nextStorageRefresh) return
-        storagePoll.requestExecutable = executable
         storagePoll.requestEpoch = storageEpoch
         storagePoll.running = true
     }
@@ -68,10 +66,31 @@ Item {
         message = "Enviando solicitação…"
         actionProcess.running = true
     }
+    // Minimal desktop session for detached launches; PATH is fixed to system directories.
+    function sessionEnvironment() {
+        var env = {PATH: "/usr/share/omarchy/bin:/usr/bin"}
+        for (const name of ["HOME", "USER", "LANG", "XDG_RUNTIME_DIR", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE",
+                            "WAYLAND_DISPLAY", "DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "HYPRLAND_INSTANCE_SIGNATURE"]) {
+            var value = Quickshell.env(name)
+            if (value) env[name] = String(value)
+        }
+        return env
+    }
+    function launch(command) {
+        Quickshell.execDetached({command: command, environment: sessionEnvironment(), clearEnvironment: true})
+    }
     function terminal() {
-        var cmd = executable === "mega-exec" ? "mega-cmd" : executable.replace(/mega-exec$/, "mega-cmd")
-        Quickshell.execDetached(["omarchy", "launch", "tui", "--app-id=omarchy-mega", cmd])
+        // Absolute mega-cmd path resolved by the bridge from trusted system directories.
+        var cmd = String(snapshot.terminal || "")
+        if (!cmd.startsWith("/")) {
+            message = "Instale o MEGAcmd para conectar este painel à sua conta."
+            return
+        }
+        launch(["/usr/bin/omarchy", "launch", "tui", "--app-id=omarchy-mega", cmd])
         message = "No terminal MEGA, use login seu@email.com. A senha será solicitada lá."
+    }
+    function openFolder(path) {
+        if (String(path).startsWith("/")) launch(["/usr/bin/xdg-open", String(path)])
     }
     Timer {
         interval: root.panelOpen ? 5000 : Math.max(5, Number(root.settings.refreshIntervalSec) || 15) * 1000
@@ -79,18 +98,13 @@ Item {
         onTriggered: root.refresh(false)
     }
     onPanelOpenChanged: if (panelOpen) refresh(false)
-    onExecutableChanged: {
-        clearStorage()
-        snapshot = {state: "loading", installed: false, connected: false, transfers: [], syncs: [], errors: []}
-        refresh(false)
-    }
     Process {
         id: poll
-        property string requestExecutable: ""
-        command: ["python3", root.bridge, "--exec", requestExecutable, "status", "--skip-storage"]
+        command: root.backendCommand.concat(["status", "--skip-storage"])
+        clearEnvironment: true
+        environment: root.backendEnvironment
         stdout: StdioCollector { id: pollOutput; waitForEnd: true }
         onExited: function(code) {
-            if (requestExecutable !== root.executable) { root.refresh(false); return }
             try {
                 var next = JSON.parse(pollOutput.text)
                 if (code !== 0 || !next.state) throw new Error(next.error || "Resposta inválida")
@@ -112,12 +126,13 @@ Item {
     }
     Process {
         id: storagePoll
-        property string requestExecutable: ""
         property int requestEpoch: 0
-        command: ["python3", root.bridge, "--exec", requestExecutable, "storage"]
+        command: root.backendCommand.concat(["storage"])
+        clearEnvironment: true
+        environment: root.backendEnvironment
         stdout: StdioCollector { id: storageOutput; waitForEnd: true }
         onExited: function(code) {
-            if (requestEpoch !== root.storageEpoch || requestExecutable !== root.executable || !root.snapshot.connected) return
+            if (requestEpoch !== root.storageEpoch || !root.snapshot.connected) return
             try {
                 var result = JSON.parse(storageOutput.text)
                 if (code !== 0 || !result.ok || !result.storage) throw new Error(result.error || "Resposta inválida")
@@ -136,7 +151,9 @@ Item {
     Process {
         id: actionProcess
         property string request: ""
-        command: ["python3", root.bridge, "--exec", root.executable, "action"]
+        command: root.backendCommand.concat(["action"])
+        clearEnvironment: true
+        environment: root.backendEnvironment
         stdinEnabled: true
         onStarted: { write(request); stdinEnabled = false }
         onRunningChanged: if (!running) stdinEnabled = true
